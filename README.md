@@ -1,2 +1,2 @@
-# puredapp
-Homepage
+# continuecash.github.io
+Website of continue.cash

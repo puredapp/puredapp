@@ -1,0 +1,401 @@
+<html>
+<head>
+<link rel="icon" href="assets/favicon.svg" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+<script src="assets/ethers-5.5.2.umd.min.js" type="application/javascript"></script>
+<script src="assets/detect-provider.min.js"></script>
+<script src="assets/attention.js"></script>
+<link rel="stylesheet" href="assets/bulma.min.css">
+<link rel="stylesheet" href="assets/attention.css">
+<title>Continue.Cash</title>
+</head>
+<body>
+<body style="margin: 0 auto; width: 380px">
+	<p>Your Address:<br><u id="signerAddress"></u></p>
+	<p>Stock:<br><u id="stockURL"></u></p>
+	<p>Money:<br><u id="moneyURL"></u></p>
+
+	<div id="createDiv" style="display: none">
+		<p>How much stock will be deposited?<br>
+		<input class="input is-info is-small" type="number" step="any" id="stockAmount"></p>
+
+		<p>How much money will be deposited?<br>
+		<input class="input is-info is-small" type="number" step="any" id="moneyAmount"></p>
+
+		<p>The high price to sell stock:<br>
+		<input class="input is-info is-small" type="number" step="any" id="highPrice"></p>
+
+		<p>The low price to buy stock:<br>
+		<input class="input is-info is-small" type="number" step="any" id="lowPrice"></p>
+
+		<center><br><button class="button is-info" onclick="CreateRobot()" 
+		>Create Robot</button></center>
+	</div>
+
+	<div id="deleteDiv" style="display: none">
+	</div>
+
+	<div id="buyDiv" style="display: none">
+		<p>How much money do you want to spend?<br>
+		<input class="input is-info is-small" type="number" step="any" id="moneyDelta"></p>
+	</div>
+
+	<div id="sellDiv" style="display: none">
+		<p>How much stock do you want to sell?<br>
+		<input class="input is-info is-small" type="number" step="any" id="stockDelta"></p>
+	</div>
+</div>
+<script>
+const SEP20ABI = [
+    "function symbol() view returns (string)",
+    "function decimals() view returns (uint8)",
+    "function balanceOf(address account) external view returns (uint256)",
+    "function allowance(address owner, address spender) external view returns (uint256)",
+    "function approve(address spender, uint256 amount) external returns (bool)",
+]
+
+const ImplAddr = "0x938F4950CA33E63b1Fb4dE042529D66448B5Cb91"
+const FactoryAddr = "0xFF0Eb1d249C7eC0486723049E0056b120aE5b617"
+
+const CCABI = [
+"function getAllRobots() view public returns (uint[] memory robotsIdAndInfo)",
+"function createRobot(uint robotInfo) external payable",
+"function deleteRobot(uint index, uint robotId) external",
+"function sellToRobot(uint robotId, uint stockDelta) external payable",
+"function buyFromRobot(uint robotId, uint moneyDelta) external payable",
+]
+
+const FactoryABI = [
+"function create(address stock, address money, address impl) external",
+"function getAddress(address stock, address money, address impl) public view returns (address)",
+]
+
+async function connect() {
+	if (typeof window.ethereum === 'undefined') {
+		if (typeof window.web3 !== 'undefined') {
+			window.ethereum = window.web3;
+		} else if (typeof window.TPJSBrigeClient !== 'undefined') {
+			window.ethereum = window.TPJSBrigeClient;
+		} else if (typeof window.imToken !== 'undefined') {
+			window.ethereum = window.imToken;
+		} else {
+			const provider = await detectEthereumProvider();
+			if (provider) {
+				window.ethereum = provider;
+			} else if(IsPC()) {
+				alert("Your browser has not installed a wallet extension (like MetaMask).");
+			} else {
+				alert("Please open this page inside a mobile wallet App.");
+			}
+		}
+	}
+	window.accounts = await window.ethereum.request({method: 'eth_requestAccounts'});
+	if (window.accounts.length == 0) {
+        	window.AlertDlg = new Attention.Alert({title: "Warning",
+        	  content: "Cannot connect to wallet"});
+		return false;
+	}
+	return true;
+}
+
+function packPrice(price) {
+	var effBits = 1
+	while(!price.mask(effBits).eq(price)) {
+		effBits += 1
+	}
+	var twoPow24 = ethers.BigNumber.from(2).pow(24)
+	if(effBits <= 25) {
+		return price
+	}
+	var shift = effBits-25
+	var shiftBN = ethers.BigNumber.from(2).pow(shift)
+	var low24 = price.div(shiftBN).sub(twoPow24)
+	var high8 = ethers.BigNumber.from(shift).add(1).mul(twoPow24)
+	return high8.add(low24)
+}
+
+function unpackPrice(packed) {
+	var twoPow24 = ethers.BigNumber.from(2).pow(24)
+	var low24 = packed.mod(twoPow24)
+	var shift = packed.div(twoPow24)
+	if(shift.isZero()) {
+		return low24
+	}
+	var shiftBN = ethers.BigNumber.from(2).pow(shift.sub(1))
+	return low24.add(twoPow24).mul(shiftBN)
+}
+
+async function init() {
+	if(!await connect()) {return;}
+	const provider = new ethers.providers.Web3Provider(window.ethereum);
+	const signer = provider.getSigner();
+	const myAddr = await signer.getAddress();
+	document.getElementById("signerAddress").innerText = myAddr;
+
+	const url = new URL(location.href);
+	try {
+		window.moneyAddr = url.searchParams.get("money")
+		window.moneyContract = new ethers.Contract(moneyAddr, SEP20ABI, provider).connect(signer)
+		window.moneySymbol = await window.moneyContract.symbol()
+		window.moneyDecimals = await window.moneyContract.decimals()
+		var moneyURL = `<a target="_blank" href="https://smartscan.cash/address/${moneyAddr}">${moneySymbol}</a>`
+		document.getElementById("moneyURL").innerHTML = moneyURL
+	} catch(e) {
+        	window.AlertDlg = new Attention.Alert({title: "Incorrect Address",
+        	  content: "Incorrect Address for Money: "+moneyAddr});
+		return
+	}
+
+	try {
+		window.stockAddr = url.searchParams.get("stock")
+		window.stockContract = new ethers.Contract(stockAddr, SEP20ABI, provider).connect(signer)
+		window.stockSymbol = await window.stockContract.symbol()
+		window.stockDecimals = await window.stockContract.decimals()
+		var stockURL = `<a target="_blank" href="https://smartscan.cash/address/${stockAddr}">${stockSymbol}</a>`
+		document.getElementById("stockURL").innerHTML = stockURL
+	} catch(e) {
+        	window.AlertDlg = new Attention.Alert({title: "Incorrect Address",
+        	  content: "Incorrect Address for Stock: "+stockAddr});
+		return
+	}
+
+	var factoryContract = new ethers.Contract(FactoryAddr, FactoryABI, provider).connect(signer)
+	window.MarketAddress = await factoryContract.getAddress(stockAddr, moneyAddr, ImplAddr)
+	// console.log('MarketAddress:', window.MarketAddress);
+	var code = await provider.getCode(window.MarketAddress)
+	if(code == "0x") {
+		new Attention.Confirm({title: "Market Not Exist",
+			content: `The market ${stockSymbol}/${moneySymbol} has not been created, do you want to create it?`,
+			onConfirm(component) {
+				factoryContract.create(stockAddr, moneyAddr, ImplAddr)
+			},
+			onCancel(component) {}});
+		return
+	}
+
+	const task = url.searchParams.get("task");
+	if(task == "create") {
+		document.getElementById("createDiv").style.display = "block"
+		document.title = "Create a robot"
+	} else if(task == "delete") {
+		document.getElementById("deleteDiv").style.display = "block"
+		document.title = "Delete a robot"
+		listMyRobots()
+	} else if(task == "buy") {
+		document.getElementById("buyDiv").style.display = "block"
+		document.title = `Buy ${stockSymbol} from a robot`
+		listRobotsForBuying()
+	} else if(task == "sell") {
+		document.getElementById("sellDiv").style.display = "block"
+		document.title = `Sell ${stockSymbol} to a robot`
+		listRobotsForSelling()
+	} else {
+        	window.AlertDlg = new Attention.Alert({title: "Incorrect Task",
+        	  content: "Incorrect Task: "+task});
+		return
+	} 
+}
+
+async function checkAllowanceAndBalance(contract, symbol, myAddr, amount, decimals) {
+	const allowanceBN = await contract.allowance(myAddr, window.MarketAddress)
+	const allowance = ethers.utils.formatUnits(allowanceBN, decimals)*1.0
+	// console.log(symbol, ', allowance:', allowance);
+	if(allowance < amount) {
+		new Attention.Confirm({title: `Approve ${symbol}`,
+			content: `You did not approve enough ${symbol} to continue.cash, do you want to approve now? After sending the approving transaction, you can retry.`,
+			onConfirm(component) {
+				const MaxAmount = ethers.utils.parseUnits('999999999')
+				contract.approve(window.MarketAddress, MaxAmount)
+			},
+			onCancel(component) {}});
+		return
+	}
+	const balanceBN = await contract.balanceOf(myAddr)
+	const balance = ethers.utils.formatUnits(balanceBN, decimals)*1.0
+	if(balance < amount) {
+		window.AlertDlg = new Attention.Alert({title: "Not Enough ${symbol}",
+			content: `${amount} ${symbol} is needed, but you only have ${balance}`});
+	}
+}
+
+async function CreateRobot() {
+	const provider = new ethers.providers.Web3Provider(window.ethereum);
+	const signer = provider.getSigner();
+	const myAddr = await signer.getAddress();
+
+	var stockAmount = document.getElementById("stockAmount").value //* 1.0
+	var moneyAmount = document.getElementById("moneyAmount").value //* 1.0
+
+	checkAllowanceAndBalance(window.stockContract, window.stockSymbol, myAddr, stockAmount, window.stockDecimals)
+	checkAllowanceAndBalance(window.moneyContract, window.moneySymbol, myAddr, moneyAmount, window.moneyDecimals)
+
+	var stockAmountBN = ethers.utils.parseUnits(stockAmount, window.stockDecimals)
+	var moneyAmountBN = ethers.utils.parseUnits(moneyAmount, window.moneyDecimals)
+	var highPrice = packPrice(ethers.utils.parseUnits(document.getElementById("highPrice").value))
+	var lowPrice = packPrice(ethers.utils.parseUnits(document.getElementById("lowPrice").value))
+	var robotInfo = stockAmountBN.mul(ethers.BigNumber.from(2).pow(96)).add(moneyAmountBN)
+	robotInfo = robotInfo.mul(ethers.BigNumber.from(2).pow(32)).add(highPrice)
+	robotInfo = robotInfo.mul(ethers.BigNumber.from(2).pow(32)).add(lowPrice)
+	// const provider = new ethers.providers.Web3Provider(window.ethereum);
+	// const signer = provider.getSigner();
+	const marketContract = new ethers.Contract(window.MarketAddress, CCABI, provider).connect(signer);
+	await marketContract.createRobot(robotInfo)
+}
+
+async function getAllRobots(onlyForAddr) {
+	const provider = new ethers.providers.Web3Provider(window.ethereum)
+	const marketContract = new ethers.Contract(window.MarketAddress, CCABI, provider)
+	var allRobotsArr = await marketContract.getAllRobots()
+	// console.log('allRobotsArr:', allRobotsArr);
+	var allRobots = []
+	var twoPow32 = ethers.BigNumber.from(2).pow(32)
+	var twoPow96 = ethers.BigNumber.from(2).pow(96)
+	window.RobotsMap = {}
+	for(var i=0; i<allRobotsArr.length; i+=2) {
+		var fullId = allRobotsArr[i]
+		// console.log('i:', i, 'fullId:', fullId);
+		var robot = {fullId: fullId.toHexString(), index: i/2}
+		robot.shortId = fullId.mod(twoPow96).toNumber()
+		robot.ownerAddr = ethers.utils.getAddress(fullId.div(twoPow96).toHexString())
+		if(onlyForAddr && onlyForAddr != robot.ownerAddr) {continue}
+		var info = allRobotsArr[i+1]
+		robot.lowPrice = ethers.utils.formatUnits(unpackPrice(info.mod(twoPow32)))*1.0
+		info = info.div(twoPow32)
+		robot.highPrice = ethers.utils.formatUnits(unpackPrice(info.mod(twoPow32)))*1.0
+		info = info.div(twoPow32)
+		robot.moneyAmountBN = info.mod(twoPow96)
+		robot.stockAmountBN = info.div(twoPow96)
+		robot.moneyAmount = ethers.utils.formatUnits(robot.moneyAmountBN, window.moneyDecimals)*1.0
+		robot.stockAmount = ethers.utils.formatUnits(robot.stockAmountBN, window.stockDecimals)*1.0
+		allRobots.push(robot)
+		window.RobotsMap[robot.fullId] = robot
+	}
+	return allRobots
+}
+
+async function listMyRobots() {
+	const provider = new ethers.providers.Web3Provider(window.ethereum);
+	const signer = provider.getSigner();
+	const myAddr = await signer.getAddress();
+	
+	var robots = await getAllRobots(myAddr);
+	if(robots.length == 0) {
+		document.getElementById("deleteDiv").innerHTML = "<p>You have no robots on duty!</p>"
+		return
+	}
+	var htmlStr = "<p>"
+	for(var i=0; i<robots.length; i++) {
+		htmlStr += `<b>${robots[i].shortId}</b>&nbsp;`
+		htmlStr += `<button onclick="DeleteRobot(${robots[i].index}, '${robots[i].fullId}')">Delete</button>&nbsp;`
+		htmlStr += `Stock: ${robots[i].stockAmount}&nbsp;`
+		htmlStr += `Money: ${robots[i].moneyAmount}&nbsp;`
+		htmlStr += `HighPrice: ${robots[i].highPrice}&nbsp;`
+		htmlStr += `LowPrice: ${robots[i].lowPrice}</p>`
+	}
+	document.getElementById("deleteDiv").innerHTML = htmlStr
+}
+
+async function listRobotsForBuying() {
+	var robots = await getAllRobots("");
+	if(robots.length == 0) {
+		document.getElementById("buyDiv").innerHTML += "<p>Found no robots to buy stock from.</p>"
+		return
+	}
+	robots.sort(function(a, b) {
+		return a.highPrice - b.highPrice;
+	});
+	var htmlStr = "<p>"
+	for(var i=0; i<robots.length; i++) {
+		htmlStr += `<b>${robots[i].shortId}</b>&nbsp;`
+		htmlStr += `<button onclick="Buy('${robots[i].fullId}')">Buy From It</button>&nbsp;`
+		htmlStr += `Stock: ${robots[i].stockAmount}&nbsp;`
+		htmlStr += `Price: ${robots[i].highPrice}</p>`
+	}
+	document.getElementById("buyDiv").innerHTML += htmlStr
+}
+
+async function listRobotsForSelling() {
+	var robots = await getAllRobots("");
+	if(robots.length == 0) {
+		document.getElementById("sellDiv").innerHTML += "<p>Found no robots to sell stock to.</p>"
+		return
+	}
+	robots.sort(function(a, b) {
+		return b.lowPrice - a.lowPrice;
+	});
+	var htmlStr = "<p>"
+	for(var i=0; i<robots.length; i++) {
+		htmlStr += `<b>${robots[i].shortId}</b>&nbsp;`
+		htmlStr += `<button onclick="Sell('${robots[i].fullId}')">Sell To It</button>&nbsp;`
+		htmlStr += `Money: ${robots[i].moneyAmount}&nbsp;`
+		htmlStr += `Price: ${robots[i].lowPrice}</p>`
+	}
+	document.getElementById("sellDiv").innerHTML += htmlStr
+}
+
+async function Buy(robotId) {
+	const provider = new ethers.providers.Web3Provider(window.ethereum);
+	const signer = provider.getSigner();
+	const myAddr = await signer.getAddress();
+
+	var moneyDelta = document.getElementById("moneyDelta").value //*1.0
+	var moneyDeltaBN = ethers.utils.parseUnits(moneyDelta, window.moneyDecimals)
+	var robot = window.RobotsMap[robotId]
+
+	var stockDelta = moneyDelta / robot.highPrice
+	if(stockDelta > robot.stockAmount) {
+        	window.AlertDlg = new Attention.Alert({title: "Robot has not enough stock",
+				content: `The robot has only ${robot.stockAmount} ${window.stockSymbol}, but you want ${stockDelta} ${window.stockSymbol}`});
+		return false;
+	}
+	checkAllowanceAndBalance(window.moneyContract, window.moneySymbol, myAddr, moneyDelta, window.moneyDecimals)
+
+	const marketContract = new ethers.Contract(window.MarketAddress, CCABI, provider).connect(signer);
+	await marketContract.buyFromRobot(robotId, moneyDeltaBN)
+}
+
+async function Sell(robotId) {
+	const provider = new ethers.providers.Web3Provider(window.ethereum);
+	const signer = provider.getSigner();
+	const myAddr = await signer.getAddress();
+
+	var stockDelta = document.getElementById("stockDelta").value//*1.0
+	var stockDeltaBN = ethers.utils.parseUnits(stockDelta, window.stockDecimals)
+	var robot = window.RobotsMap[robotId]
+	var moneyDelta = stockDelta * robot.lowPrice
+	if(moneyDelta > robot.moneyAmount) {
+        	window.AlertDlg = new Attention.Alert({title: "Robot has not enough money",
+				content: `The robot has only ${robot.moneyAmount} ${window.moneySymbol}, but must pay you ${moneyDelta} ${window.moneySymbol}`});
+		return false;
+	}
+	checkAllowanceAndBalance(window.stockContract, window.stockSymbol, myAddr, stockDelta, window.stockDecimals)
+
+	const marketContract = new ethers.Contract(window.MarketAddress, CCABI, provider).connect(signer);
+	await marketContract.sellToRobot(robotId, stockDeltaBN)
+}
+
+async function DeleteRobot(idx, id) {
+	const provider = new ethers.providers.Web3Provider(window.ethereum);
+	const signer = provider.getSigner();
+	const marketContract = new ethers.Contract(window.MarketAddress, CCABI, provider).connect(signer);
+
+	const myAddr = await signer.getAddress();
+	var robots = await getAllRobots(myAddr);
+	// console.log('robots:', robots);
+	// console.log('DeleteRobot, idx:', idx, 'id:', id);
+	await marketContract.deleteRobot(idx, id);
+}
+
+window.onload = init;
+
+document.onclick = function() {
+	if(window.AlertDlg) {
+		window.AlertDlg.destroy();
+		delete window.AlertDlg;
+	}
+}
+
+</script>
+</body>
+</html>

@@ -1,16 +1,36 @@
-<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" href="/favicon.ico" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>PureDApp</title>
-    <script type="module" crossorigin src="/assets/index.a7779d36.js"></script>
-    <link rel="modulepreload" href="/assets/vendor.a79ba823.js">
-    <link rel="stylesheet" href="/assets/index.4b34e509.css">
-  </head>
-  <body>
-    <div id="app"></div>
-    
-  </body>
+<html>
+<head>
+<link rel="icon" href="assets/favicon.png" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+<link rel="stylesheet" href="assets/bulma.min.css">
+<title>Continue.Cash</title>
+</head>
+<body style="margin: 0 auto; width: 380px">
+	<center class="title is-4">Trading Robots Continue to Earn!</center>
+	<p>This DApp can help you make trading robots. You create a trading robot by depositing stock tokens and money tokens. It will try to sell the stock at a high price and buy the stock at a low price, helping you earn more tokens. You can delete the trading robot anytime and get back your tokens.</p>
+	<br>
+
+        <form action="robot.html" method="GET">
+	
+	<p>What is the stock token?<br>
+	<input class="input is-info is-small" type="text" name="stock"
+	placeholder="Please enter an SEP20 token's address"></p>
+
+	<p>What is the money token?<br>
+	<input class="input is-info is-small" type="text" name="money"
+	placeholder="Please enter an SEP20 token's address"></p>
+
+	<p>What do you want to do?</p>
+	<label class="radio"><input type="radio" name="task" value="create" checked>&nbsp;Create a robot</label><br>
+	<label class="radio"><input type="radio" name="task" value="delete">&nbsp;View the created robots</label><br>
+	<label class="radio"><input type="radio" name="task" value="buy">&nbsp;Buy from robots created by others</label><br>
+	<label class="radio"><input type="radio" name="task" value="sell">&nbsp;Sell to robots created by others</label><br>
+
+	<center><input type="submit" value="GO!"/></center>
+        </form>
+
+	<center style="font-size: 10px"><br><a href="https://github.com/continuecash/continuecash"
+	target="_blank">Contract Source</a></center>
+</body>
 </html>
